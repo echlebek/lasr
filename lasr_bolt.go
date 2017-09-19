@@ -41,7 +41,10 @@ func NewQ(db *bolt.DB, name string, options ...Option) (*Q, error) {
 			return nil, fmt.Errorf("lasr: couldn't create Q: %s", err)
 		}
 	}
-	return q, q.init()
+	if err := q.init(); err != nil {
+		return nil, err
+	}
+	return q, nil
 }
 
 func (q *Q) init() error {
