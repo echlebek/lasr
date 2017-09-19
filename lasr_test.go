@@ -184,6 +184,43 @@ func TestUnacked(t *testing.T) {
 	}
 }
 
+type mockSeq struct {
+	id uint64
+}
+
+func (m *mockSeq) NextSequence() (ID, error) {
+	defer func() { m.id++ }()
+	return Uint64ID(m.id), nil
+}
+
+func TestSequencer(t *testing.T) {
+	q, cleanup := newQ(t)
+	defer cleanup()
+
+	q, err := NewQ(q.db, "testing", WithSequencer(&mockSeq{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := q.Send([]byte("foo")); err != nil {
+		t.Fatal(err)
+	}
+
+	msg, err := q.Receive(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want, err := Uint64ID(0).MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := msg.ID; !bytes.Equal(got, want) {
+		t.Errorf("bad ID: got %v, want %v", got, want)
+	}
+}
+
 func benchSend(b *testing.B, msgSize int) {
 	q, cleanup := newQ(b)
 	defer cleanup()
@@ -206,30 +243,31 @@ func BenchmarkSend_64(b *testing.B) {
 	benchSend(b, 64)
 }
 
-func benchReceive(b *testing.B, msgSize int) {
+func benchRoundtrip(b *testing.B, msgSize int) {
 	q, cleanup := newQ(b)
 	defer cleanup()
 	msg := make([]byte, msgSize)
 	for i := 0; i < len(msg); i++ {
 		msg[i] = byte(i % 256)
 	}
-	// make a huge queue
-	for i := 0; i < 4000; i++ {
-		if err := q.Send(msg); err != nil {
-			b.Fatal(err)
-		}
-	}
 	ctx := context.Background()
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			if _, err := q.Receive(ctx); err != nil {
+			if err := q.Send(msg); err != nil {
+				b.Fatal(err)
+			}
+			msg, err := q.Receive(ctx)
+			if err != nil {
+				b.Fatal(err)
+			}
+			if err := msg.Ack(); err != nil {
 				b.Fatal(err)
 			}
 		}
 	})
 }
 
-func BenchmarkReceive_64(b *testing.B) {
-	benchReceive(b, 64)
+func BenchmarkRoundtrip_64(b *testing.B) {
+	benchRoundtrip(b, 64)
 }
