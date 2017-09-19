@@ -135,6 +135,55 @@ func TestReceiveContextCancelled(t *testing.T) {
 	<-done // blocks forever if the Receive never gets cancelled
 }
 
+func TestUnacked(t *testing.T) {
+	q, cleanup := newQ(t)
+	defer cleanup()
+
+	msg := []byte("foo")
+	if err := q.Send(msg); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := q.Receive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Make sure the unacked message is in the unacked queue
+	err := q.db.Update(func(tx *bolt.Tx) error {
+		bucket, err := q.bucket(tx, unackedKey)
+		if err != nil {
+			return err
+		}
+		if bucket == nil {
+			t.Error("nil bucket")
+			return nil
+		}
+		stats := bucket.Stats()
+		if got, want := stats.KeyN, 1; got != want {
+			t.Errorf("got %d unacked messages, want %d", got, want)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Assume at this point the program crashed and we loaded the db again.
+	q, err = NewQ(q.db, "testing")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := q.Receive(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got, want := string(m.Body), "foo"; got != want {
+		t.Errorf("bad body: got %q, want %q", got, want)
+	}
+}
+
 func benchSend(b *testing.B, msgSize int) {
 	q, cleanup := newQ(b)
 	defer cleanup()

@@ -60,6 +60,10 @@ func (q *Q) init() error {
 			if err := bucket.Put(k, v); err != nil {
 				return err
 			}
+			q.tokens <- struct{}{}
+			if err := cursor.Delete(); err != nil {
+				return err
+			}
 		}
 		stats := bucket.Stats()
 		for i := 0; i < stats.KeyN; i++ {
