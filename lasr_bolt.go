@@ -53,6 +53,7 @@ func (q *Q) init() error {
 		if err != nil {
 			return err
 		}
+		readyKeys := bucket.Stats().KeyN
 		unacked, err := q.bucket(tx, unackedKey)
 		if err != nil {
 			return err
@@ -63,13 +64,9 @@ func (q *Q) init() error {
 			if err := bucket.Put(k, v); err != nil {
 				return err
 			}
-			q.tokens <- struct{}{}
-			if err := cursor.Delete(); err != nil {
-				return err
-			}
+			readyKeys++
 		}
-		stats := bucket.Stats()
-		for i := 0; i < stats.KeyN; i++ {
+		for i := 0; i < readyKeys; i++ {
 			q.tokens <- struct{}{}
 		}
 		return nil
