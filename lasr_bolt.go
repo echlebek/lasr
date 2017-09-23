@@ -117,13 +117,18 @@ func (q *Q) ack(id []byte) error {
 }
 
 func (q *Q) nack(id []byte, retry bool) error {
-	err := q.db.Batch(func(tx *bolt.Tx) error {
+	return q.db.Update(func(tx *bolt.Tx) (rerr error) {
 		bucket, err := q.bucket(tx, unackedKey)
 		if err != nil {
 			return err
 		}
 		val := bucket.Get(id)
 		if retry {
+			defer func() {
+				if rerr == nil {
+					q.tokens <- struct{}{}
+				}
+			}()
 			ready, err := q.bucket(tx, readyKey)
 			if err != nil {
 				return err
@@ -136,10 +141,6 @@ func (q *Q) nack(id []byte, retry bool) error {
 		}
 		return returned.Put(id, val)
 	})
-	if err == nil {
-		q.tokens <- struct{}{}
-	}
-	return err
 }
 
 func (q *Q) nextUint64ID() (Uint64ID, error) {

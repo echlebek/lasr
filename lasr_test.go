@@ -91,6 +91,9 @@ func TestSendReceiveNackNoRetry(t *testing.T) {
 	if err := message.Ack(); err != ErrAckNack {
 		t.Error("expected ErrAckNack")
 	}
+	if got, want := len(q.tokens), 0; got != want {
+		t.Errorf("wrong tokens len: got %d, want %d", got, want)
+	}
 }
 
 func TestSendReeiveNackWithRetry(t *testing.T) {
