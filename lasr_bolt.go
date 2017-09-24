@@ -203,13 +203,14 @@ func (q *Q) Send(message []byte) error {
 	if err != nil {
 		return err
 	}
-	err = q.db.Update(func(tx *bolt.Tx) error {
+	return q.db.Update(func(tx *bolt.Tx) (err error) {
+		defer func() {
+			if err == nil {
+				q.tokens <- struct{}{}
+			}
+		}()
 		return q.send(id, message, tx)
 	})
-	if err == nil {
-		q.tokens <- struct{}{}
-	}
-	return err
 }
 
 func (q *Q) send(id ID, body []byte, tx *bolt.Tx) error {
@@ -245,14 +246,14 @@ func (q *Q) Receive(ctx context.Context) (*Message, error) {
 		body, id []byte
 		err      error
 	)
-	defer func() {
-		if err != nil {
-			// return the token
-			q.tokens <- struct{}{}
-		}
-	}()
+	err = q.db.Update(func(tx *bolt.Tx) (err error) {
+		defer func() {
+			if err != nil {
+				// return the token
+				q.tokens <- struct{}{}
+			}
+		}()
 
-	err = q.db.Update(func(tx *bolt.Tx) error {
 		ready, err := q.bucket(tx, q.readyKey)
 		if err != nil {
 			return err
