@@ -226,7 +226,7 @@ func TestSequencer(t *testing.T) {
 }
 
 func TestDeadLetters(t *testing.T) {
-	q, cleanup := newQ(t, WithDeadLetters)
+	q, cleanup := newQ(t, WithDeadLetters())
 	defer cleanup()
 
 	msg := []byte("foo")
