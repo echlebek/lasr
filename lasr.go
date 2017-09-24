@@ -73,6 +73,13 @@ func WithSequencer(seq Sequencer) Option {
 	}
 }
 
+// WithDeadLetters will cause nacked messages that are not retried to be added
+// to a dead letters queue.
+func WithDeadLetters(q *Q) error {
+	q.returnedKey = []byte("deadletters")
+	return nil
+}
+
 // Ack acknowledges successful receipt and processing of the Message.
 func (m *Message) Ack() (err error) {
 	err = ErrAckNack

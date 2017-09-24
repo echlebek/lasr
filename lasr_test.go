@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/boltdb/bolt"
 )
@@ -15,7 +16,7 @@ type fataler interface {
 	Fatal(...interface{})
 }
 
-func newQ(t fataler) (*Q, func()) {
+func newQ(t fataler, options ...Option) (*Q, func()) {
 	td, err := ioutil.TempDir("", "")
 	if err != nil {
 		t.Fatal(err)
@@ -32,7 +33,7 @@ func newQ(t fataler) (*Q, func()) {
 			t.Fatal(err)
 		}
 	}
-	q, err := NewQ(db, "testing")
+	q, err := NewQ(db, "testing", options...)
 	if err != nil {
 		defer cleanup()
 		t.Fatal(err)
@@ -153,7 +154,7 @@ func TestUnacked(t *testing.T) {
 
 	// Make sure the unacked message is in the unacked queue
 	err := q.db.Update(func(tx *bolt.Tx) error {
-		bucket, err := q.bucket(tx, unackedKey)
+		bucket, err := q.bucket(tx, q.unackedKey)
 		if err != nil {
 			return err
 		}
@@ -222,6 +223,42 @@ func TestSequencer(t *testing.T) {
 	if got := msg.ID; !bytes.Equal(got, want) {
 		t.Errorf("bad ID: got %v, want %v", got, want)
 	}
+}
+
+func TestDeadLetters(t *testing.T) {
+	q, cleanup := newQ(t, WithDeadLetters)
+	defer cleanup()
+
+	msg := []byte("foo")
+	if err := q.Send(msg); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := q.Receive(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := m.Nack(false); err != nil {
+		t.Fatal(err)
+	}
+
+	d, err := DeadLetters(q)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	m, err = d.Receive(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !bytes.Equal(m.Body, msg) {
+		t.Errorf("bad body: %q", string(m.Body))
+	}
+
 }
 
 func benchSend(b *testing.B, msgSize int) {

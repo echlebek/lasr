@@ -2,24 +2,26 @@ package lasr
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/boltdb/bolt"
 )
 
-var (
-	readyKey    = []byte("ready")
-	unackedKey  = []byte("unacked")
-	returnedKey = []byte("returned")
-)
-
 // Q is a first-in, first-out queue. Its methods are goroutine-safe.
 type Q struct {
-	db     *bolt.DB
-	name   []byte
-	root   [][]byte
-	seq    Sequencer
-	tokens chan struct{}
+	db          *bolt.DB
+	name        []byte
+	root        [][]byte
+	seq         Sequencer
+	tokens      chan struct{}
+	readyKey    []byte
+	unackedKey  []byte
+	returnedKey []byte
+}
+
+func (q *Q) String() string {
+	return fmt.Sprintf("Q{Name: %q, Messages: %d}", string(q.name), len(q.tokens))
 }
 
 func (q *Q) nextSequence() (ID, error) {
@@ -29,12 +31,19 @@ func (q *Q) nextSequence() (ID, error) {
 	return q.nextUint64ID()
 }
 
+func newTokens() chan struct{} {
+	return make(chan struct{}, int(^uint(0)>>1)) // max int
+}
+
 // NewQ creates a new Q.
 func NewQ(db *bolt.DB, name string, options ...Option) (*Q, error) {
+	bName := []byte(name)
 	q := &Q{
-		db:     db,
-		name:   []byte(name),
-		tokens: make(chan struct{}, int(^uint(0)>>1)), // max int
+		db:         db,
+		name:       bName,
+		tokens:     newTokens(),
+		readyKey:   []byte("ready"),
+		unackedKey: []byte("unacked"),
 	}
 	for _, o := range options {
 		if err := o(q); err != nil {
@@ -49,12 +58,12 @@ func NewQ(db *bolt.DB, name string, options ...Option) (*Q, error) {
 
 func (q *Q) init() error {
 	return q.db.Update(func(tx *bolt.Tx) error {
-		bucket, err := q.bucket(tx, readyKey)
+		bucket, err := q.bucket(tx, q.readyKey)
 		if err != nil {
 			return err
 		}
 		readyKeys := bucket.Stats().KeyN
-		unacked, err := q.bucket(tx, unackedKey)
+		unacked, err := q.bucket(tx, q.unackedKey)
 		if err != nil {
 			return err
 		}
@@ -71,6 +80,31 @@ func (q *Q) init() error {
 		}
 		return nil
 	})
+}
+
+// If Q has dead-lettering enabled, DeadLetters will return a dead letters
+// queue that is the same as Q, but will emit dead letters on Receive.
+// The dead letter queue itself does not support dead lettering; nacked
+// messages that are not retried will be deleted.
+//
+// If dead-lettering  is not enabled on q, an error will be returned.
+func DeadLetters(q *Q) (*Q, error) {
+	if len(q.returnedKey) == 0 {
+		return nil, errors.New("dead letters not available")
+	}
+	d := &Q{
+		db:         q.db,
+		name:       q.name,
+		root:       q.root,
+		seq:        q.seq,
+		tokens:     newTokens(),
+		readyKey:   q.returnedKey,
+		unackedKey: []byte("deadletters-unacked"),
+	}
+	if err := d.init(); err != nil {
+		return nil, err
+	}
+	return d, nil
 }
 
 type bucketer interface {
@@ -108,7 +142,7 @@ func (q *Q) bucket(tx *bolt.Tx, key []byte) (*bolt.Bucket, error) {
 
 func (q *Q) ack(id []byte) error {
 	return q.db.Batch(func(tx *bolt.Tx) error {
-		bucket, err := q.bucket(tx, unackedKey)
+		bucket, err := q.bucket(tx, q.unackedKey)
 		if err != nil {
 			return err
 		}
@@ -118,7 +152,7 @@ func (q *Q) ack(id []byte) error {
 
 func (q *Q) nack(id []byte, retry bool) error {
 	return q.db.Update(func(tx *bolt.Tx) (rerr error) {
-		bucket, err := q.bucket(tx, unackedKey)
+		bucket, err := q.bucket(tx, q.unackedKey)
 		if err != nil {
 			return err
 		}
@@ -129,17 +163,20 @@ func (q *Q) nack(id []byte, retry bool) error {
 					q.tokens <- struct{}{}
 				}
 			}()
-			ready, err := q.bucket(tx, readyKey)
+			ready, err := q.bucket(tx, q.readyKey)
 			if err != nil {
 				return err
 			}
 			return ready.Put(id, val)
 		}
-		returned, err := q.bucket(tx, returnedKey)
-		if err != nil {
-			return err
+		if len(q.returnedKey) > 0 {
+			returned, err := q.bucket(tx, q.returnedKey)
+			if err != nil {
+				return err
+			}
+			return returned.Put(id, val)
 		}
-		return returned.Put(id, val)
+		return nil
 	})
 }
 
@@ -181,7 +218,7 @@ func (q *Q) send(id ID, body []byte, tx *bolt.Tx) error {
 		return err
 	}
 
-	bucket, err := q.bucket(tx, readyKey)
+	bucket, err := q.bucket(tx, q.readyKey)
 	if err != nil {
 		return BoltError(err)
 	}
@@ -216,7 +253,7 @@ func (q *Q) Receive(ctx context.Context) (*Message, error) {
 	}()
 
 	err = q.db.Update(func(tx *bolt.Tx) error {
-		ready, err := q.bucket(tx, readyKey)
+		ready, err := q.bucket(tx, q.readyKey)
 		if err != nil {
 			return err
 		}
@@ -229,7 +266,7 @@ func (q *Q) Receive(ctx context.Context) (*Message, error) {
 		copy(id, k)
 		body = make([]byte, len(v))
 		copy(body, v)
-		unacked, err := q.bucket(tx, unackedKey)
+		unacked, err := q.bucket(tx, q.unackedKey)
 		if err != nil {
 			return err
 		}
