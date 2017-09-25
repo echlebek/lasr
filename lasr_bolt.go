@@ -24,11 +24,11 @@ func (q *Q) String() string {
 	return fmt.Sprintf("Q{Name: %q, Messages: %d}", string(q.name), len(q.tokens))
 }
 
-func (q *Q) nextSequence() (ID, error) {
+func (q *Q) nextSequence(tx *bolt.Tx) (ID, error) {
 	if q.seq != nil {
 		return q.seq.NextSequence()
 	}
-	return q.nextUint64ID()
+	return q.nextUint64ID(tx)
 }
 
 func newTokens() chan struct{} {
@@ -82,15 +82,15 @@ func (q *Q) init() error {
 	})
 }
 
-// If Q has dead-lettering enabled, DeadLetters will return a dead letters
-// queue that is the same as Q, but will emit dead letters on Receive.
-// The dead letter queue itself does not support dead lettering; nacked
+// If dead-lettering is enabled on q, DeadLetters will return a dead-letter
+// queue that is named the same as q, but will emit dead-letters on Receive.
+// The dead-letter queue itself does not support dead-lettering; nacked
 // messages that are not retried will be deleted.
 //
-// If dead-lettering  is not enabled on q, an error will be returned.
+// If dead-lettering is not enabled on q, an error will be returned.
 func DeadLetters(q *Q) (*Q, error) {
 	if len(q.returnedKey) == 0 {
-		return nil, errors.New("dead letters not available")
+		return nil, errors.New("dead-letters not available")
 	}
 	d := &Q{
 		db:         q.db,
@@ -180,15 +180,9 @@ func (q *Q) nack(id []byte, retry bool) error {
 	})
 }
 
-func (q *Q) nextUint64ID() (Uint64ID, error) {
-	var seq uint64
-	var err error
-
-	err = q.db.Update(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket(q.name)
-		seq, err = bucket.NextSequence()
-		return err
-	})
+func (q *Q) nextUint64ID(tx *bolt.Tx) (Uint64ID, error) {
+	bucket := tx.Bucket(q.name)
+	seq, err := bucket.NextSequence()
 
 	if err != nil {
 		return Uint64ID(0), BoltError(err)
@@ -199,11 +193,11 @@ func (q *Q) nextUint64ID() (Uint64ID, error) {
 
 // Send sends a message to Q.
 func (q *Q) Send(message []byte) error {
-	id, err := q.nextSequence()
-	if err != nil {
-		return err
-	}
 	return q.db.Update(func(tx *bolt.Tx) (err error) {
+		id, err := q.nextSequence(tx)
+		if err != nil {
+			return err
+		}
 		defer func() {
 			if err == nil {
 				q.tokens <- struct{}{}
