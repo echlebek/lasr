@@ -3,6 +3,7 @@ package lasr
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -178,10 +179,34 @@ func TestUnacked(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Make sure all the messages are moved out of the unacked bucket
+	err = q.db.Update(func(tx *bolt.Tx) error {
+		bucket, err := q.bucket(tx, q.unackedKey)
+		if err != nil {
+			return err
+		}
+		k, v := bucket.Cursor().First()
+		if k != nil {
+			t.Errorf("expected empty bucket, found key %x", k)
+			fmt.Println(string(v))
+		}
+		return nil
+	})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	m, err := q.Receive(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	defer func() {
+		if err := m.Ack(); err != nil {
+			t.Fatal(err)
+		}
+	}()
 
 	if got, want := string(m.Body), "foo"; got != want {
 		t.Errorf("bad body: got %q, want %q", got, want)

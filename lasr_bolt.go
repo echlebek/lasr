@@ -75,6 +75,15 @@ func (q *Q) init() error {
 			}
 			readyKeys++
 		}
+		root, err := q.rootBucket(tx)
+		if err != nil {
+			return err
+		}
+		// Delete the unacked bucket now that the unacked messages have been
+		// returned to the ready bucket.
+		if err := root.DeleteBucket(q.unackedKey); err != nil {
+			return err
+		}
 		for i := 0; i < readyKeys; i++ {
 			q.tokens <- struct{}{}
 		}
@@ -257,10 +266,8 @@ func (q *Q) Receive(ctx context.Context) (*Message, error) {
 		if k == nil {
 			return emptyQ
 		}
-		id = make([]byte, len(k))
-		copy(id, k)
-		body = make([]byte, len(v))
-		copy(body, v)
+		id = cloneBytes(k)
+		body = cloneBytes(v)
 		unacked, err := q.bucket(tx, q.unackedKey)
 		if err != nil {
 			return err
@@ -280,4 +287,10 @@ func (q *Q) Receive(ctx context.Context) (*Message, error) {
 		return nil, err
 	}
 	return &Message{Body: body, ID: id, status: Ready, q: q}, nil
+}
+
+func cloneBytes(b []byte) []byte {
+	r := make([]byte, len(b))
+	copy(r, b)
+	return r
 }
