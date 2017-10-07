@@ -8,9 +8,6 @@ import (
 	"sync"
 )
 
-// BoltError wraps bolt errors.
-type BoltError error
-
 var (
 	emptyQ     = errors.New("empty queue")
 	ErrAckNack = errors.New("Ack or Nack already called")

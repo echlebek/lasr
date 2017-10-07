@@ -134,17 +134,17 @@ func (q *Q) rootBucket(tx *bolt.Tx) (*bolt.Bucket, error) {
 	}
 	result, err := bucket.CreateBucketIfNotExists(q.name)
 
-	return result, BoltError(err)
+	return result, err
 }
 
 func (q *Q) bucket(tx *bolt.Tx, key []byte) (*bolt.Bucket, error) {
 	bucket, err := q.rootBucket(tx)
 	if err != nil {
-		return nil, BoltError(err)
+		return nil, err
 	}
 	bucket, err = bucket.CreateBucketIfNotExists(key)
 	if err != nil {
-		return nil, BoltError(err)
+		return nil, err
 	}
 	return bucket, nil
 }
@@ -194,7 +194,7 @@ func (q *Q) nextUint64ID(tx *bolt.Tx) (Uint64ID, error) {
 	seq, err := bucket.NextSequence()
 
 	if err != nil {
-		return Uint64ID(0), BoltError(err)
+		return Uint64ID(0), err
 	}
 
 	return Uint64ID(seq), nil
@@ -224,11 +224,11 @@ func (q *Q) send(id ID, body []byte, tx *bolt.Tx) error {
 
 	bucket, err := q.bucket(tx, q.readyKey)
 	if err != nil {
-		return BoltError(err)
+		return err
 	}
 
 	if err := bucket.Put(key, body); err != nil {
-		return BoltError(err)
+		return err
 	}
 	return nil
 }
