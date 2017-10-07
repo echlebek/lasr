@@ -5,7 +5,7 @@ import (
 	"encoding"
 	"encoding/binary"
 	"errors"
-	"sync"
+	"sync/atomic"
 )
 
 var (
@@ -36,11 +36,11 @@ const (
 )
 
 type Message struct {
-	Body    []byte
-	ID      []byte
-	status  Status
-	q       *Q
-	ackNack sync.Once
+	Body   []byte
+	ID     []byte
+	status Status
+	q      *Q
+	once   int32
 }
 
 // Sequencer returns an ID with each call to NextSequence and any error
@@ -81,20 +81,18 @@ func WithDeadLetters() Option {
 
 // Ack acknowledges successful receipt and processing of the Message.
 func (m *Message) Ack() (err error) {
-	err = ErrAckNack
-	m.ackNack.Do(func() {
-		err = m.q.ack(m.ID)
-	})
-	return
+	if !atomic.CompareAndSwapInt32(&m.once, 0, 1) {
+		return ErrAckNack
+	}
+	return m.q.ack(m.ID)
 }
 
 // Nack negatively acknowledges successful receipt and processing of the
 // Message. If Nack is called with retry True, then the Message will be
 // placed back in the queue in its original position.
 func (m *Message) Nack(retry bool) (err error) {
-	err = ErrAckNack
-	m.ackNack.Do(func() {
-		err = m.q.nack(m.ID, retry)
-	})
-	return
+	if !atomic.CompareAndSwapInt32(&m.once, 0, 1) {
+		return ErrAckNack
+	}
+	return m.q.nack(m.ID, retry)
 }

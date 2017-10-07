@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -284,6 +285,104 @@ func TestDeadLetters(t *testing.T) {
 		t.Errorf("bad body: %q", string(m.Body))
 	}
 
+}
+
+func TestAckConcurrent(t *testing.T) {
+	q, cleanup := newQ(t, WithDeadLetters())
+	defer cleanup()
+
+	msg := []byte("foo")
+	if err := q.Send(msg); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := q.Receive(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	errors := make([]error, 100000)
+	var wg sync.WaitGroup
+	wg.Add(len(errors))
+
+	for i := range errors {
+		go func(i int) {
+			errors[i] = m.Ack()
+			wg.Done()
+		}(i)
+	}
+
+	wg.Wait()
+
+	ackCount, ackErrCount := 0, 0
+
+	for _, err := range errors {
+		switch err {
+		case nil:
+			ackCount += 1
+		case ErrAckNack:
+			ackErrCount += 1
+		default:
+			t.Fatal(err)
+		}
+	}
+
+	if got, want := ackCount, 1; got != want {
+		t.Errorf("wrong number of acks: got %d, want %d", got, want)
+	}
+
+	if got, want := ackErrCount, 99999; got != want {
+		t.Errorf("wrong number of errors: got %d, want %d", got, want)
+	}
+}
+
+func TestNackConcurrent(t *testing.T) {
+	q, cleanup := newQ(t, WithDeadLetters())
+	defer cleanup()
+
+	msg := []byte("foo")
+	if err := q.Send(msg); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := q.Receive(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	errors := make([]error, 100000)
+	var wg sync.WaitGroup
+	wg.Add(len(errors))
+
+	for i := range errors {
+		go func(i int) {
+			errors[i] = m.Ack()
+			wg.Done()
+		}(i)
+	}
+
+	wg.Wait()
+
+	nackCount, nackErrCount := 0, 0
+
+	for _, err := range errors {
+		switch err {
+		case nil:
+			nackCount += 1
+		case ErrAckNack:
+			nackErrCount += 1
+		default:
+			t.Fatal(err)
+		}
+	}
+
+	if got, want := nackCount, 1; got != want {
+		t.Errorf("wrong number of nacks: got %d, want %d", got, want)
+	}
+
+	if got, want := nackErrCount, 99999; got != want {
+		t.Errorf("wrong number of errors: got %d, want %d", got, want)
+	}
 }
 
 func benchSend(b *testing.B, msgSize int) {
