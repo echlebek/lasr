@@ -94,12 +94,9 @@ func TestSendReceiveNackNoRetry(t *testing.T) {
 	if err := message.Ack(); err != ErrAckNack {
 		t.Error("expected ErrAckNack")
 	}
-	if got, want := len(q.tokens), 0; got != want {
-		t.Errorf("wrong tokens len: got %d, want %d", got, want)
-	}
 }
 
-func TestSendReeiveNackWithRetry(t *testing.T) {
+func TestSendReceiveNackWithRetry(t *testing.T) {
 	q, cleanup := newQ(t)
 	defer cleanup()
 
@@ -408,7 +405,7 @@ func BenchmarkSend_64(b *testing.B) {
 }
 
 func benchRoundtrip(b *testing.B, msgSize int) {
-	q, cleanup := newQ(b)
+	q, cleanup := newQ(b, WithMessageBufferSize(10))
 	defer cleanup()
 	msg := make([]byte, msgSize)
 	for i := 0; i < len(msg); i++ {

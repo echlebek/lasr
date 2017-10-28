@@ -5,12 +5,14 @@ import (
 	"encoding"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"sync/atomic"
 )
 
 var (
 	emptyQ     = errors.New("empty queue")
 	ErrAckNack = errors.New("Ack or Nack already called")
+	ErrQClosed = errors.New("Q is closed")
 )
 
 // ID is used for bolt keys. Every message will be assigned an ID.
@@ -41,6 +43,7 @@ type Message struct {
 	status Status
 	q      *Q
 	once   int32
+	err    error
 }
 
 // Sequencer returns an ID with each call to NextSequence and any error
@@ -75,6 +78,22 @@ func WithSequencer(seq Sequencer) Option {
 func WithDeadLetters() Option {
 	return func(q *Q) error {
 		q.returnedKey = []byte("deadletters")
+		return nil
+	}
+}
+
+// WithMessageBufferSize sets the message buffer size. By default, the message
+// buffer size is 1. Values less than 1 are not allowed.
+//
+// The buffer is used by Receive to efficiently ready messages for consumption.
+// If the buffer is greater than 1, then multiple messages can retrieved in a
+// single transaction. This comes at the cost of memory use.
+func WithMessageBufferSize(size int) Option {
+	return func(q *Q) error {
+		if size < 1 {
+			return fmt.Errorf("lasr: invalid message buffer size: %d", size)
+		}
+		q.messagesBufSize = size
 		return nil
 	}
 }
