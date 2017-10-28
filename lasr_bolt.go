@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync/atomic"
 
 	"github.com/boltdb/bolt"
 )
@@ -20,7 +19,6 @@ type Q struct {
 	returnedKey     []byte
 	messages        chan *Message
 	messagesBufSize int
-	lastError       atomic.Value
 	wakeup          chan struct{}
 	closed          chan struct{}
 }
