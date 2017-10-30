@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/boltdb/bolt"
 )
@@ -17,10 +18,36 @@ type Q struct {
 	readyKey        []byte
 	unackedKey      []byte
 	returnedKey     []byte
-	messages        chan *Message
+	messages        *fifo
 	messagesBufSize int
 	wakeup          chan struct{}
 	closed          chan struct{}
+	inFlight        sync.WaitGroup
+}
+
+// Close closes q. When q is closed, Send, Receive, and Close will return
+// ErrQClosed. Close blocks until all messages in the "unacked" state are Acked
+// or Nacked.
+func (q *Q) Close() error {
+	q.messages.Lock()
+	defer q.messages.Unlock()
+	select {
+	case <-q.closed:
+		return ErrQClosed
+	default:
+		close(q.closed)
+	}
+	q.inFlight.Wait()
+	return q.init()
+}
+
+func (q *Q) isClosed() bool {
+	select {
+	case <-q.closed:
+		return true
+	default:
+		return false
+	}
 }
 
 func (q *Q) String() string {
@@ -34,26 +61,16 @@ func (q *Q) nextSequence(tx *bolt.Tx) (ID, error) {
 	return q.nextUint64ID(tx)
 }
 
-func (q *Q) isClosed() bool {
-	select {
-	case <-q.closed:
-		return true
-	default:
-		return false
-	}
-}
-
 // NewQ creates a new Q.
 func NewQ(db *bolt.DB, name string, options ...Option) (*Q, error) {
 	bName := []byte(name)
 	q := &Q{
-		db:              db,
-		name:            bName,
-		readyKey:        []byte("ready"),
-		unackedKey:      []byte("unacked"),
-		messagesBufSize: 1,
-		wakeup:          make(chan struct{}, 1),
-		closed:          make(chan struct{}),
+		db:         db,
+		name:       bName,
+		readyKey:   []byte("ready"),
+		unackedKey: []byte("unacked"),
+		wakeup:     make(chan struct{}, 1),
+		closed:     make(chan struct{}),
 	}
 	for _, o := range options {
 		if err := o(q); err != nil {
@@ -66,13 +83,11 @@ func NewQ(db *bolt.DB, name string, options ...Option) (*Q, error) {
 	return q, nil
 }
 
-func (q *Q) Close() {
-	close(q.closed)
-}
-
 func (q *Q) init() error {
-	q.messages = make(chan *Message, q.messagesBufSize)
-	err := q.db.Update(func(tx *bolt.Tx) error {
+	// for messages to be buffered, need at least size 2. 0 is invalid.
+	q.messagesBufSize++
+	q.messages = newFifo(q.messagesBufSize)
+	return q.db.Update(func(tx *bolt.Tx) error {
 		bucket, err := q.bucket(tx, q.readyKey)
 		if err != nil {
 			return err
@@ -104,10 +119,6 @@ func (q *Q) init() error {
 		// returned to the ready bucket.
 		return root.DeleteBucket(q.unackedKey)
 	})
-	if err == nil {
-		go q.processReceives()
-	}
-	return err
 }
 
 // If dead-lettering is enabled on q, DeadLetters will return a dead-letter
@@ -118,7 +129,7 @@ func (q *Q) init() error {
 // If dead-lettering is not enabled on q, an error will be returned.
 func DeadLetters(q *Q) (*Q, error) {
 	if len(q.returnedKey) == 0 {
-		return nil, errors.New("dead-letters not available")
+		return nil, errors.New("lasr: dead-letters not available")
 	}
 	d := &Q{
 		db:              q.db,
@@ -129,7 +140,6 @@ func DeadLetters(q *Q) (*Q, error) {
 		unackedKey:      []byte("deadletters-unacked"),
 		messagesBufSize: q.messagesBufSize,
 		wakeup:          make(chan struct{}, 1),
-		closed:          make(chan struct{}),
 	}
 	if err := d.init(); err != nil {
 		return nil, err
@@ -171,22 +181,20 @@ func (q *Q) bucket(tx *bolt.Tx, key []byte) (*bolt.Bucket, error) {
 }
 
 func (q *Q) ack(id []byte) error {
-	if q.isClosed() {
-		return ErrQClosed
-	}
-	return q.db.Batch(func(tx *bolt.Tx) error {
+	err := q.db.Batch(func(tx *bolt.Tx) error {
 		bucket, err := q.bucket(tx, q.unackedKey)
 		if err != nil {
 			return err
 		}
 		return bucket.Delete(id)
 	})
+	if err == nil {
+		q.inFlight.Done()
+	}
+	return err
 }
 
 func (q *Q) nack(id []byte, retry bool) error {
-	if q.isClosed() {
-		return ErrQClosed
-	}
 	err := q.db.Update(func(tx *bolt.Tx) (rerr error) {
 		bucket, err := q.bucket(tx, q.unackedKey)
 		if err != nil {
@@ -209,13 +217,17 @@ func (q *Q) nack(id []byte, retry bool) error {
 		}
 		return nil
 	})
-	if err == nil {
+	if err != nil {
+		return err
+	}
+	q.inFlight.Done()
+	if retry && !q.isClosed() {
 		select {
 		case q.wakeup <- struct{}{}:
 		default:
 		}
 	}
-	return err
+	return nil
 }
 
 func (q *Q) nextUint64ID(tx *bolt.Tx) (Uint64ID, error) {
@@ -271,13 +283,26 @@ func (q *Q) send(id ID, body []byte, tx *bolt.Tx) error {
 // the time the context is done, then the function will return a nil Message
 // and the result of ctx.Err().
 func (q *Q) Receive(ctx context.Context) (*Message, error) {
-	select {
-	case msg := <-q.messages:
+	if q.isClosed() {
+		return nil, ErrQClosed
+	}
+	q.messages.Lock()
+	defer q.messages.Unlock()
+START:
+	if q.messages.Len() > 0 {
+		msg := q.messages.Pop()
 		err := msg.err
 		if err != nil {
 			msg = nil
+		} else {
+			q.inFlight.Add(1)
 		}
-		return msg, err
+		return msg, nil
+	}
+	select {
+	case <-q.wakeup:
+		q.processReceives()
+		goto START
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-q.closed:
@@ -286,59 +311,47 @@ func (q *Q) Receive(ctx context.Context) (*Message, error) {
 }
 
 func (q *Q) processReceives() {
-	var (
-		body, id []byte
-		err      error
-		messages = make([]*Message, 0, q.messagesBufSize)
-	)
-	for {
-		select {
-		case <-q.wakeup:
-		case <-q.closed:
-			return
+	var body, id []byte
+	messages := make([]*Message, 0, q.messagesBufSize)
+	err := q.db.Update(func(tx *bolt.Tx) error {
+		ready, err := q.bucket(tx, q.readyKey)
+		if err != nil {
+			return err
 		}
-		err = q.db.Update(func(tx *bolt.Tx) error {
-			ready, err := q.bucket(tx, q.readyKey)
+		cur := ready.Cursor()
+		i := 0
+		for k, v := cur.First(); k != nil && i < q.messagesBufSize; k, v = cur.Next() {
+			id = cloneBytes(k)
+			body = cloneBytes(v)
+			unacked, err := q.bucket(tx, q.unackedKey)
 			if err != nil {
 				return err
 			}
-			cur := ready.Cursor()
-			i := 0
-			for k, v := cur.First(); k != nil && i < q.messagesBufSize; k, v = cur.Next() {
-				id = cloneBytes(k)
-				body = cloneBytes(v)
-				unacked, err := q.bucket(tx, q.unackedKey)
-				if err != nil {
-					return err
-				}
-				if err := unacked.Put(k, v); err != nil {
-					return err
-				}
-				if err := ready.Delete(k); err != nil {
-					return err
-				}
-				messages = append(messages, &Message{
-					Body:   body,
-					ID:     id,
-					status: Ready,
-					q:      q,
-				})
-				i++
-				if i >= q.messagesBufSize {
-					// More work could be available
-					select {
-					case q.wakeup <- struct{}{}:
-					default:
-					}
-				}
+			if err := unacked.Put(k, v); err != nil {
+				return err
 			}
-			return nil
-		})
-		for _, m := range messages {
-			m.err = err
-			q.messages <- m
+			if err := ready.Delete(k); err != nil {
+				return err
+			}
+			messages = append(messages, &Message{
+				Body: body,
+				ID:   id,
+				q:    q,
+			})
+			i++
 		}
-		messages = messages[0:0]
+		if i >= q.messagesBufSize {
+			// More work could be available
+			select {
+			case q.wakeup <- struct{}{}:
+			default:
+			}
+		}
+		return nil
+	})
+	for _, m := range messages {
+		m.err = err
+		q.messages.Push(m)
 	}
 }
 

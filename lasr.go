@@ -6,13 +6,14 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 )
 
 var (
 	emptyQ     = errors.New("empty queue")
-	ErrAckNack = errors.New("Ack or Nack already called")
-	ErrQClosed = errors.New("Q is closed")
+	ErrAckNack = errors.New("lasr: Ack or Nack already called")
+	ErrQClosed = errors.New("lasr: Q is closed")
 )
 
 // ID is used for bolt keys. Every message will be assigned an ID.
@@ -38,12 +39,11 @@ const (
 )
 
 type Message struct {
-	Body   []byte
-	ID     []byte
-	status Status
-	q      *Q
-	once   int32
-	err    error
+	Body []byte
+	ID   []byte
+	q    *Q
+	once int32
+	err  error
 }
 
 // Sequencer returns an ID with each call to NextSequence and any error
@@ -83,14 +83,20 @@ func WithDeadLetters() Option {
 }
 
 // WithMessageBufferSize sets the message buffer size. By default, the message
-// buffer size is 1. Values less than 1 are not allowed.
+// buffer size is 0. Values less than 0 are not allowed.
 //
 // The buffer is used by Receive to efficiently ready messages for consumption.
-// If the buffer is greater than 1, then multiple messages can retrieved in a
-// single transaction. This comes at the cost of memory use.
+// If the buffer is greater than 0, then multiple messages can retrieved in a
+// single transaction.
+//
+// Buffered messages come with a caveat: messages will move into the "unacked"
+// state before Receive is called.
+//
+// Buffered messages come at the cost of increased memory use. If messages are
+// large in size, use this cautiously.
 func WithMessageBufferSize(size int) Option {
 	return func(q *Q) error {
-		if size < 1 {
+		if size < 0 {
 			return fmt.Errorf("lasr: invalid message buffer size: %d", size)
 		}
 		q.messagesBufSize = size
@@ -114,4 +120,33 @@ func (m *Message) Nack(retry bool) (err error) {
 		return ErrAckNack
 	}
 	return m.q.nack(m.ID, retry)
+}
+
+// fifo is for buffering received messages
+type fifo struct {
+	data []*Message
+	sync.Mutex
+}
+
+func newFifo(size int) *fifo {
+	return &fifo{
+		data: make([]*Message, 0, size),
+	}
+}
+
+func (f *fifo) Pop() *Message {
+	msg := f.data[0]
+	f.data = append(f.data[0:0], f.data[1:]...)
+	return msg
+}
+
+func (f *fifo) Push(m *Message) {
+	if len(f.data) == cap(f.data) {
+		panic("push to full buffer")
+	}
+	f.data = append(f.data, m)
+}
+
+func (f *fifo) Len() int {
+	return len(f.data)
 }
