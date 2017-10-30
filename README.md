@@ -2,22 +2,22 @@
 A persistent message queue backed by BoltDB. This queue is useful when the producers and consumers can live in the same process.
 
 Project goals
-=============
+-------------
   * Data integrity over performance.
   * Simplicity over complexity.
   * Ease of use.
   * Minimal feature set.
 
 Safety
-======
+------
 lasr is designed to never lose information. When the Send method completes, messages have been safely written to disk. On Receive, messages are not deleted until Ack is called. Users should make sure they always respond to messages with Ack or Nack.
 
 Misc
-====
+----
 Dead-lettering is supported, but disabled by default.
 
 Benchmarks
-==========
+----------
 
 On a late 2012 Macbook Pro,
 
@@ -25,11 +25,11 @@ On a late 2012 Macbook Pro,
 
 ```
 Summary:
-  Total:    11.4155 secs
-  Slowest:    0.0342 secs
-  Fastest:    0.0006 secs
-  Average:    0.0057 secs
-  Requests/sec:    1752.0004
+  Total:         11.4155 secs
+  Slowest:       0.0342 secs
+  Fastest:       0.0006 secs
+  Average:       0.0057 secs
+  Requests/sec:  1752.0004
 
 Status code distribution:
   [200]    20000 responses
