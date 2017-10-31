@@ -192,11 +192,11 @@ func TestUnacked(t *testing.T) {
 	}
 
 	// deadlock unless we clear the wg here
-	q.inFlight = sync.WaitGroup{}
+	q.sync.inFlight = sync.WaitGroup{}
 
 	// Make sure the unacked message is in the unacked queue
 	err := q.db.Update(func(tx *bolt.Tx) error {
-		bucket, err := q.bucket(tx, q.unackedKey)
+		bucket, err := q.bucket(tx, q.keys.unacked)
 		if err != nil {
 			return err
 		}
@@ -222,7 +222,7 @@ func TestUnacked(t *testing.T) {
 
 	// Make sure all the messages are moved out of the unacked bucket
 	err = q.db.Update(func(tx *bolt.Tx) error {
-		bucket, err := q.bucket(tx, q.unackedKey)
+		bucket, err := q.bucket(tx, q.keys.unacked)
 		if err != nil {
 			return err
 		}
@@ -479,7 +479,7 @@ func TestClose(t *testing.T) {
 		t.Errorf("buffer not drained")
 	}
 	err = q.db.Update(func(tx *bolt.Tx) error {
-		bucket, err := q.bucket(tx, q.unackedKey)
+		bucket, err := q.bucket(tx, q.keys.unacked)
 		if err != nil {
 			return err
 		}

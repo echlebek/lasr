@@ -11,9 +11,9 @@ import (
 )
 
 var (
-	emptyQ     = errors.New("empty queue")
-	ErrAckNack = errors.New("lasr: Ack or Nack already called")
-	ErrQClosed = errors.New("lasr: Q is closed")
+	ErrAckNack        = errors.New("lasr: Ack or Nack already called")
+	ErrQClosed        = errors.New("lasr: Q is closed")
+	ErrOptionsApplied = errors.New("lasr: options cannot be applied after New")
 )
 
 // ID is used for bolt keys. Every message will be assigned an ID.
@@ -68,6 +68,9 @@ type Option func(q *Q) error
 // WithSequencer will cause a Q to use a user-provided Sequencer.
 func WithSequencer(seq Sequencer) Option {
 	return func(q *Q) error {
+		if q.optsApplied {
+			return ErrOptionsApplied
+		}
 		q.seq = seq
 		return nil
 	}
@@ -77,7 +80,10 @@ func WithSequencer(seq Sequencer) Option {
 // to a dead letters queue.
 func WithDeadLetters() Option {
 	return func(q *Q) error {
-		q.returnedKey = []byte("deadletters")
+		if q.optsApplied {
+			return ErrOptionsApplied
+		}
+		q.keys.returned = []byte("deadletters")
 		return nil
 	}
 }
@@ -96,10 +102,13 @@ func WithDeadLetters() Option {
 // large in size, use this cautiously.
 func WithMessageBufferSize(size int) Option {
 	return func(q *Q) error {
+		if q.optsApplied {
+			return ErrOptionsApplied
+		}
 		if size < 0 {
 			return fmt.Errorf("lasr: invalid message buffer size: %d", size)
 		}
-		q.messagesBufSize = size
+		q.messages = newFifo(size + 1)
 		return nil
 	}
 }
@@ -149,4 +158,18 @@ func (f *fifo) Push(m *Message) {
 
 func (f *fifo) Len() int {
 	return len(f.data)
+}
+
+func (f *fifo) Cap() int {
+	return cap(f.data)
+}
+
+func (f *fifo) SetError(err error) {
+	for i := range f.data {
+		f.data[i].err = err
+	}
+}
+
+func (f *fifo) Drain() {
+	f.data = f.data[0:0]
 }
