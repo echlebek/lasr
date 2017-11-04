@@ -241,12 +241,13 @@ func (q *Q) nextUint64ID(tx *bolt.Tx) (Uint64ID, error) {
 
 // Send sends a message to Q. When send completes with nil error, the message
 // sent to Q will be in the Ready state.
-func (q *Q) Send(message []byte) error {
+func (q *Q) Send(message []byte) (ID, error) {
 	if q.isClosed() {
-		return ErrQClosed
+		return nil, ErrQClosed
 	}
+	var id ID
 	err := q.db.Update(func(tx *bolt.Tx) (err error) {
-		id, err := q.nextSequence(tx)
+		id, err = q.nextSequence(tx)
 		if err != nil {
 			return err
 		}
@@ -255,16 +256,16 @@ func (q *Q) Send(message []byte) error {
 	if err == nil {
 		q.waker.Wake()
 	}
-	return err
+	return id, err
 }
 
 // Delay is like Send, but the message will not enter the Ready state until
 // after "when" has occurred.
 //
 // If "when" has already occurred, then it will be set to time.Now().
-func (q *Q) Delay(message []byte, when time.Time) error {
+func (q *Q) Delay(message []byte, when time.Time) (ID, error) {
 	if when.After(MaxDelayTime) {
-		return fmt.Errorf("time out of range: %s", when.Format(time.RFC3339))
+		return nil, fmt.Errorf("time out of range: %s", when.Format(time.RFC3339))
 	}
 	if when.Before(time.Now()) {
 		when = time.Now()
@@ -272,7 +273,7 @@ func (q *Q) Delay(message []byte, when time.Time) error {
 	id := Uint64ID(when.UnixNano())
 	key, err := id.MarshalBinary()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	err = q.db.Update(func(tx *bolt.Tx) error {
 		bucket, err := q.bucket(tx, q.keys.delayed)
@@ -298,7 +299,7 @@ func (q *Q) Delay(message []byte, when time.Time) error {
 	if err == nil {
 		q.waker.WakeAt(time.Unix(0, int64(id)))
 	}
-	return err
+	return id, err
 }
 
 func (q *Q) send(id ID, body []byte, tx *bolt.Tx) error {

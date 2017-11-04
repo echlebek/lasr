@@ -28,7 +28,7 @@ func (q Q) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if err := q.Send(buf.Bytes()); err != nil {
+	if _, err := q.Send(buf.Bytes()); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

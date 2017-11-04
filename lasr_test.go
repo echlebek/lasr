@@ -101,12 +101,20 @@ func TestSendReceive(t *testing.T) {
 	defer cleanup()
 
 	msg := []byte("foobar")
-	if err := q.Send(msg); err != nil {
+	id, err := q.Send(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idb, err := id.MarshalBinary()
+	if err != nil {
 		t.Fatal(err)
 	}
 	message, err := q.Receive(context.Background())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !bytes.Equal(message.ID, idb) {
+		t.Error("messages do not match")
 	}
 	if !bytes.Equal(message.Body, msg) {
 		t.Error("messages do not match")
@@ -121,7 +129,7 @@ func TestSendReceiveNackNoRetry(t *testing.T) {
 	defer cleanup()
 
 	msg := []byte("foobar")
-	if err := q.Send(msg); err != nil {
+	if _, err := q.Send(msg); err != nil {
 		t.Fatal(err)
 	}
 	message, err := q.Receive(context.Background())
@@ -141,7 +149,12 @@ func TestSendReceiveNackWithRetry(t *testing.T) {
 	defer cleanup()
 
 	msg := []byte("foobar")
-	if err := q.Send(msg); err != nil {
+	id, err := q.Send(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idb, err := id.MarshalBinary()
+	if err != nil {
 		t.Fatal(err)
 	}
 	message, err := q.Receive(context.Background())
@@ -154,6 +167,9 @@ func TestSendReceiveNackWithRetry(t *testing.T) {
 	message, err = q.Receive(context.Background())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !bytes.Equal(message.ID, idb) {
+		t.Errorf("bad id: %v", message.ID)
 	}
 	if !bytes.Equal(message.Body, msg) {
 		t.Errorf("bad body: %q", string(message.Body))
@@ -183,7 +199,12 @@ func TestUnacked(t *testing.T) {
 	defer cleanup()
 
 	msg := []byte("foo")
-	if err := q.Send(msg); err != nil {
+	id, err := q.Send(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idb, err := id.MarshalBinary()
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -195,7 +216,7 @@ func TestUnacked(t *testing.T) {
 	q.inFlight = sync.WaitGroup{}
 
 	// Make sure the unacked message is in the unacked queue
-	err := q.db.Update(func(tx *bolt.Tx) error {
+	err = q.db.Update(func(tx *bolt.Tx) error {
 		bucket, err := q.bucket(tx, q.keys.unacked)
 		if err != nil {
 			return err
@@ -251,6 +272,10 @@ func TestUnacked(t *testing.T) {
 	if got, want := string(m.Body), "foo"; got != want {
 		t.Errorf("bad body: got %q, want %q", got, want)
 	}
+
+	if got, want := m.ID, idb; !bytes.Equal(got, want) {
+		t.Errorf("bad id: got %v, want %v", got, want)
+	}
 }
 
 type mockSeq struct {
@@ -271,7 +296,12 @@ func TestSequencer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := q.Send([]byte("foo")); err != nil {
+	id, err := q.Send([]byte("foo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	idb, err := id.MarshalBinary()
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -288,6 +318,9 @@ func TestSequencer(t *testing.T) {
 	if got := msg.ID; !bytes.Equal(got, want) {
 		t.Errorf("bad ID: got %v, want %v", got, want)
 	}
+	if got, want := msg.ID, idb; !bytes.Equal(got, want) {
+		t.Errorf("bad ID: got %v, want %v", got, want)
+	}
 }
 
 func TestDeadLetters(t *testing.T) {
@@ -295,7 +328,12 @@ func TestDeadLetters(t *testing.T) {
 	defer cleanup()
 
 	msg := []byte("foo")
-	if err := q.Send(msg); err != nil {
+	id, err := q.Send(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idb, err := id.MarshalBinary()
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -324,6 +362,9 @@ func TestDeadLetters(t *testing.T) {
 		t.Errorf("bad body: %q", string(m.Body))
 	}
 
+	if got, want := m.ID, idb; !bytes.Equal(got, want) {
+		t.Errorf("bad id: got %v, want %v", got, want)
+	}
 }
 
 func TestAckConcurrent(t *testing.T) {
@@ -331,7 +372,7 @@ func TestAckConcurrent(t *testing.T) {
 	defer cleanup()
 
 	msg := []byte("foo")
-	if err := q.Send(msg); err != nil {
+	if _, err := q.Send(msg); err != nil {
 		t.Fatal(err)
 	}
 
@@ -380,7 +421,7 @@ func TestNackConcurrent(t *testing.T) {
 	defer cleanup()
 
 	msg := []byte("foo")
-	if err := q.Send(msg); err != nil {
+	if _, err := q.Send(msg); err != nil {
 		t.Fatal(err)
 	}
 
@@ -435,7 +476,7 @@ func benchSend(b *testing.B, msgSize int) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			if err := q.Send(msg); err != nil {
+			if _, err := q.Send(msg); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -448,10 +489,11 @@ func TestClose(t *testing.T) {
 	if err := q.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := q.Send(nil), ErrQClosed; got != want {
+	_, err := q.Send(nil)
+	if got, want := err, ErrQClosed; got != want {
 		t.Errorf("bad error message: got %q, want %q", got, want)
 	}
-	_, err := q.Receive(nil)
+	_, err = q.Receive(nil)
 	if got, want := err, ErrQClosed; got != want {
 		t.Errorf("bad error message: got %q, want %q", got, want)
 	}
@@ -461,7 +503,7 @@ func TestClose(t *testing.T) {
 	q, cleanup = newQ(t, WithMessageBufferSize(5))
 	defer cleanup()
 	for i := 0; i < 5; i++ {
-		if err := q.Send([]byte{byte(i)}); err != nil {
+		if _, err := q.Send([]byte{byte(i)}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -497,8 +539,13 @@ func TestDelayed(t *testing.T) {
 	q, cleanup := newQ(t)
 	defer cleanup()
 	delayUntil := time.Now().Add(time.Millisecond * 100)
-	if err := q.Delay(nil, delayUntil); err != nil {
+	id, err := q.Delay(nil, delayUntil)
+	if err != nil {
 		t.Fatal(err)
+	}
+	tm := int64(id.(Uint64ID))
+	if tm, now := time.Unix(0, tm).Round(time.Hour), time.Now().Round(time.Hour); !tm.Equal(now) {
+		t.Errorf("bad id: %v", tm)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
@@ -531,7 +578,7 @@ func benchRoundtrip(b *testing.B, msgSize int) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			if err := q.Send(msg); err != nil {
+			if _, err := q.Send(msg); err != nil {
 				b.Fatal(err)
 			}
 			msg, err := q.Receive(ctx)
