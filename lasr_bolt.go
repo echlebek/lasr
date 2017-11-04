@@ -1,10 +1,12 @@
 package lasr
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/boltdb/bolt"
 )
@@ -18,7 +20,9 @@ type Q struct {
 	seq         Sequencer
 	keys        bucketKeys
 	messages    *fifo
-	sync        synch
+	closed      chan struct{}
+	inFlight    sync.WaitGroup
+	waker       *waker
 	optsApplied bool
 }
 
@@ -26,12 +30,7 @@ type bucketKeys struct {
 	ready    []byte
 	returned []byte
 	unacked  []byte
-}
-
-type synch struct {
-	wakeup   chan struct{}
-	closed   chan struct{}
-	inFlight sync.WaitGroup
+	delayed  []byte
 }
 
 // Close closes q. When q is closed, Send, Receive, and Close will return
@@ -41,29 +40,21 @@ func (q *Q) Close() error {
 	q.messages.Lock()
 	defer q.messages.Unlock()
 	select {
-	case <-q.sync.closed:
+	case <-q.closed:
 		return ErrQClosed
 	default:
-		close(q.sync.closed)
+		close(q.closed)
 	}
-	q.sync.inFlight.Wait()
+	q.inFlight.Wait()
 	return q.equilibrate()
 }
 
 func (q *Q) isClosed() bool {
 	select {
-	case <-q.sync.closed:
+	case <-q.closed:
 		return true
 	default:
 		return false
-	}
-}
-
-// wake wakes up q for I/O
-func (q *Q) wake() {
-	select {
-	case q.sync.wakeup <- struct{}{}:
-	default:
 	}
 }
 
@@ -81,16 +72,17 @@ func (q *Q) nextSequence(tx *bolt.Tx) (ID, error) {
 // NewQ creates a new Q.
 func NewQ(db *bolt.DB, name string, options ...Option) (*Q, error) {
 	bName := []byte(name)
+	closed := make(chan struct{})
 	q := &Q{
 		db:   db,
 		name: bName,
 		keys: bucketKeys{
 			ready:   []byte("ready"),
 			unacked: []byte("unacked"),
-		}, sync: synch{
-			wakeup: make(chan struct{}, 1),
-			closed: make(chan struct{}),
+			delayed: []byte("delayed"),
 		},
+		waker:  newWaker(closed),
+		closed: closed,
 	}
 	for _, o := range options {
 		if err := o(q); err != nil {
@@ -130,8 +122,8 @@ func (q *Q) equilibrate() error {
 			}
 			readyKeys++
 		}
-		if readyKeys > 0 {
-			q.wake()
+		if readyKeys > 0 && !q.isClosed() {
+			q.waker.Wake()
 		}
 		q.messages.Drain()
 		root, err := tx.CreateBucketIfNotExists(q.name)
@@ -154,6 +146,7 @@ func DeadLetters(q *Q) (*Q, error) {
 	if len(q.keys.returned) == 0 {
 		return nil, errors.New("lasr: dead-letters not available")
 	}
+	closed := make(chan struct{})
 	d := &Q{
 		db:   q.db,
 		name: q.name,
@@ -162,10 +155,8 @@ func DeadLetters(q *Q) (*Q, error) {
 			ready:   q.keys.returned,
 			unacked: []byte("deadletters-unacked"),
 		},
-		sync: synch{
-			wakeup: make(chan struct{}, 1),
-			closed: make(chan struct{}),
-		},
+		waker:  newWaker(closed),
+		closed: closed,
 	}
 	if err := d.init(); err != nil {
 		return nil, err
@@ -199,7 +190,7 @@ func (q *Q) ack(id []byte) error {
 		return bucket.Delete(id)
 	})
 	if err == nil {
-		q.sync.inFlight.Done()
+		q.inFlight.Done()
 	}
 	return err
 }
@@ -230,9 +221,9 @@ func (q *Q) nack(id []byte, retry bool) error {
 	if err != nil {
 		return err
 	}
-	q.sync.inFlight.Done()
+	q.inFlight.Done()
 	if retry && !q.isClosed() {
-		q.wake()
+		q.waker.Wake()
 	}
 	return nil
 }
@@ -262,7 +253,50 @@ func (q *Q) Send(message []byte) error {
 		return q.send(id, message, tx)
 	})
 	if err == nil {
-		q.wake()
+		q.waker.Wake()
+	}
+	return err
+}
+
+// Delay is like Send, but the message will not enter the Ready state until
+// after "when" has occurred.
+//
+// If "when" has already occurred, then it will be set to time.Now().
+func (q *Q) Delay(message []byte, when time.Time) error {
+	if when.After(MaxDelayTime) {
+		return fmt.Errorf("time out of range: %s", when.Format(time.RFC3339))
+	}
+	if when.Before(time.Now()) {
+		when = time.Now()
+	}
+	id := Uint64ID(when.UnixNano())
+	key, err := id.MarshalBinary()
+	if err != nil {
+		return err
+	}
+	err = q.db.Update(func(tx *bolt.Tx) error {
+		bucket, err := q.bucket(tx, q.keys.delayed)
+		if err != nil {
+			return err
+		}
+		// Reserve a spot for the message. If its exact time in unix
+		// nanoseconds has already been reserved, pick the next spot,
+		// ad-infinitum.
+		for {
+			k, _ := bucket.Cursor().Seek(key)
+			if !bytes.Equal(k, key) {
+				break
+			}
+			id++
+			key, err = id.MarshalBinary()
+			if err != nil {
+				return err
+			}
+		}
+		return bucket.Put(key, message)
+	})
+	if err == nil {
+		q.waker.WakeAt(time.Unix(0, int64(id)))
 	}
 	return err
 }
@@ -297,17 +331,17 @@ START:
 		if err != nil {
 			msg = nil
 		} else {
-			q.sync.inFlight.Add(1)
+			q.inFlight.Add(1)
 		}
 		return msg, err
 	}
 	select {
-	case <-q.sync.wakeup:
+	case <-q.waker.C:
 		q.processReceives()
 		goto START
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case <-q.sync.closed:
+	case <-q.closed:
 		return nil, ErrQClosed
 	}
 }
@@ -319,7 +353,19 @@ func (q *Q) getMessages(tx *bolt.Tx, key []byte) error {
 	}
 	cur := bucket.Cursor()
 	i := q.messages.Len()
+	var currentTime []byte
+	if bytes.Equal(key, q.keys.delayed) {
+		// special case for processing delays
+		t := Uint64ID(time.Now().UnixNano())
+		currentTime, err = t.MarshalBinary()
+		if err != nil {
+			return err
+		}
+	}
 	for k, v := cur.First(); k != nil && i < q.messages.Cap(); k, v = cur.Next() {
+		if currentTime != nil && bytes.Compare(k, currentTime) > 0 {
+			return nil
+		}
 		id := cloneBytes(k)
 		body := cloneBytes(v)
 		unacked, err := q.bucket(tx, q.keys.unacked)
@@ -341,13 +387,23 @@ func (q *Q) getMessages(tx *bolt.Tx, key []byte) error {
 	}
 	if i >= q.messages.Cap() {
 		// More work could be available
-		q.wake()
+		q.waker.Wake()
 	}
 	return nil
 }
 
 func (q *Q) processReceives() {
 	q.messages.SetError(q.db.Update(func(tx *bolt.Tx) error {
+		// Prioritize delayed messages first. Not all instances of Q will
+		// have delayed messages.
+		if len(q.keys.delayed) > 0 {
+			if err := q.getMessages(tx, q.keys.delayed); err != nil {
+				return err
+			}
+			if q.messages.Len() == q.messages.Cap() {
+				return nil
+			}
+		}
 		return q.getMessages(tx, q.keys.ready)
 	}))
 }

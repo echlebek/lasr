@@ -192,7 +192,7 @@ func TestUnacked(t *testing.T) {
 	}
 
 	// deadlock unless we clear the wg here
-	q.sync.inFlight = sync.WaitGroup{}
+	q.inFlight = sync.WaitGroup{}
 
 	// Make sure the unacked message is in the unacked queue
 	err := q.db.Update(func(tx *bolt.Tx) error {
@@ -490,6 +490,29 @@ func TestClose(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDelayed(t *testing.T) {
+	q, cleanup := newQ(t)
+	defer cleanup()
+	delayUntil := time.Now().Add(time.Millisecond * 100)
+	if err := q.Delay(nil, delayUntil); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	defer cancel()
+	msg, err := q.Receive(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := msg.Ack(); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	if time.Now().UnixNano() < delayUntil.UnixNano() {
+		t.Errorf("delayed message arrived too early")
 	}
 }
 
