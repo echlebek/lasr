@@ -27,10 +27,13 @@ type Q struct {
 }
 
 type bucketKeys struct {
-	ready    []byte
-	returned []byte
-	unacked  []byte
-	delayed  []byte
+	ready     []byte
+	returned  []byte
+	unacked   []byte
+	delayed   []byte
+	waiting   []byte
+	blockedOn []byte
+	blocking  []byte
 }
 
 // Close closes q. When q is closed, Send, Receive, and Close will return
@@ -77,9 +80,12 @@ func NewQ(db *bolt.DB, name string, options ...Option) (*Q, error) {
 		db:   db,
 		name: bName,
 		keys: bucketKeys{
-			ready:   []byte("ready"),
-			unacked: []byte("unacked"),
-			delayed: []byte("delayed"),
+			ready:     []byte("ready"),
+			unacked:   []byte("unacked"),
+			delayed:   []byte("delayed"),
+			waiting:   []byte("waiting"),
+			blockedOn: []byte("blockedOn"),
+			blocking:  []byte("blocking"),
 		},
 		waker:  newWaker(closed),
 		closed: closed,
@@ -181,8 +187,72 @@ func (q *Q) bucket(tx *bolt.Tx, key []byte) (*bolt.Bucket, error) {
 	return bucket, nil
 }
 
+// stopWaitingOn causes all messages waiting on id to not wait on id.
+// If stopWaitingOn finds any messages that were waiting on id that are not
+// waiting on any other messages, it will move them to the Ready state.
+func (q *Q) stopWaitingOn(tx *bolt.Tx, id []byte) (bool, error) {
+	// blocking -> x blocking y
+	// blockedOn -> x blocked on y
+	wake := false
+	blocking, err := q.bucket(tx, q.keys.blocking)
+	if err != nil {
+		return wake, err
+	}
+	blocker := blocking.Bucket(id)
+	if blocker == nil {
+		return wake, nil
+	}
+	blockedOn, err := q.bucket(tx, q.keys.blockedOn)
+	if err != nil {
+		return wake, err
+	}
+	c := blocker.Cursor()
+	for k, _ := c.First(); k != nil; k, _ = c.Next() {
+		blockedMsg := blockedOn.Bucket(k)
+		if blockedMsg == nil {
+			continue
+		}
+		if err := blockedMsg.Delete(id); err != nil {
+			return wake, err
+		}
+		c = blockedMsg.Cursor()
+		if k, _ := c.First(); k != nil {
+			// There are still messages blocking the release of blockedMsg
+			continue
+		}
+		// at this point, nothing is causing 'blockedMsg' to wait anymore.
+		// a message will be placed into the ready state
+		if err := blockedOn.DeleteBucket(k); err != nil {
+			return wake, err
+		}
+		waiting, err := q.bucket(tx, q.keys.waiting)
+		if err != nil {
+			return wake, err
+		}
+		v := waiting.Get(k)
+		ready, err := q.bucket(tx, q.keys.ready)
+		if err != nil {
+			return wake, err
+		}
+		if err := ready.Put(k, v); err != nil {
+			return wake, err
+		}
+		wake = true
+		if err := waiting.Delete(k); err != nil {
+			return wake, err
+		}
+	}
+	return wake, blocking.DeleteBucket(id)
+}
+
 func (q *Q) ack(id []byte) error {
-	err := q.db.Batch(func(tx *bolt.Tx) error {
+	var wake bool
+	err := q.db.Update(func(tx *bolt.Tx) error {
+		var err error
+		wake, err = q.stopWaitingOn(tx, id)
+		if err != nil {
+			return err
+		}
 		bucket, err := q.bucket(tx, q.keys.unacked)
 		if err != nil {
 			return err
@@ -192,37 +262,47 @@ func (q *Q) ack(id []byte) error {
 	if err == nil {
 		q.inFlight.Done()
 	}
+	if wake && !q.isClosed() {
+		q.waker.Wake()
+	}
 	return err
 }
 
 func (q *Q) nack(id []byte, retry bool) error {
+	var wake bool
 	err := q.db.Update(func(tx *bolt.Tx) (rerr error) {
 		bucket, err := q.bucket(tx, q.keys.unacked)
 		if err != nil {
 			return err
 		}
-		val := bucket.Get(id)
 		if retry {
+			wake = true
+			val := bucket.Get(id)
 			ready, err := q.bucket(tx, q.keys.ready)
 			if err != nil {
 				return err
 			}
 			return ready.Put(id, val)
 		}
+		wake, err = q.stopWaitingOn(tx, id)
+		if err != nil {
+			return err
+		}
 		if len(q.keys.returned) > 0 {
+			val := bucket.Get(id)
 			returned, err := q.bucket(tx, q.keys.returned)
 			if err != nil {
 				return err
 			}
 			return returned.Put(id, val)
 		}
-		return nil
+		return bucket.Delete(id)
 	})
 	if err != nil {
 		return err
 	}
 	q.inFlight.Done()
-	if retry && !q.isClosed() {
+	if wake && !q.isClosed() {
 		q.waker.Wake()
 	}
 	return nil
@@ -300,6 +380,64 @@ func (q *Q) Delay(message []byte, when time.Time) (ID, error) {
 		q.waker.WakeAt(time.Unix(0, int64(id)))
 	}
 	return id, err
+}
+
+// Wait causes a message to wait for other messages to Ack, before entering the
+// Ready state.
+//
+// When all of the messages Wait is waiting on have been Acked, then the message
+// will enter the Ready state.
+//
+// When there are no messages to wait on, Wait behaves the same as Send.
+func (q *Q) Wait(msg []byte, on ...ID) (ID, error) {
+	if len(on) < 1 {
+		return q.Send(msg)
+	}
+	var id ID
+	return id, q.db.Update(func(tx *bolt.Tx) error {
+		var err error
+		id, err = q.nextSequence(tx)
+		if err != nil {
+			return err
+		}
+		idb, err := id.MarshalBinary()
+		if err != nil {
+			return err
+		}
+		blockedOn, err := q.bucket(tx, q.keys.blockedOn)
+		if err != nil {
+			return err
+		}
+		blockedMsg, err := blockedOn.CreateBucketIfNotExists(idb)
+		if err != nil {
+			return err
+		}
+		blocking, err := q.bucket(tx, q.keys.blocking)
+		if err != nil {
+			return err
+		}
+		for _, id := range on {
+			idc, err := id.MarshalBinary()
+			if err != nil {
+				return err
+			}
+			if err := blockedMsg.Put(idc, nil); err != nil {
+				return err
+			}
+			blockerMsg, err := blocking.CreateBucketIfNotExists(idc)
+			if err != nil {
+				return err
+			}
+			if err := blockerMsg.Put(idb, nil); err != nil {
+				return err
+			}
+		}
+		waiting, err := q.bucket(tx, q.keys.waiting)
+		if err != nil {
+			return err
+		}
+		return waiting.Put(idb, msg)
+	})
 }
 
 func (q *Q) send(id ID, body []byte, tx *bolt.Tx) error {
