@@ -41,14 +41,10 @@ func (id Uint64ID) MarshalBinary() ([]byte, error) {
 	return buf.Bytes(), err
 }
 
-type Status string
-
-const (
-	Ready    Status = "Ready"
-	Unacked  Status = "Unacked"
-	Returned Status = "Returned"
-)
-
+// Message is a messaged returned from Q on Receive.
+//
+// Message contains a Body and an ID. The ID will be equal to the ID that was
+// returned on Send, Delay or Wait for this message.
 type Message struct {
 	Body []byte
 	ID   []byte
