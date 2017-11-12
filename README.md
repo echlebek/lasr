@@ -21,40 +21,47 @@ Dead-lettering is supported, but disabled by default.
 Benchmarks
 ----------
 
-On a late 2012 Macbook Pro,
+On 5th Gen Lenovo X1 Carbon with 512 GB SSD:
 
 `$ hey -m POST -D main.go -h2 -cpus 2 -n 20000 -c 10 http://localhost:8080`
 
 ```
 Summary:
-  Total:         11.4155 secs
-  Slowest:       0.0342 secs
-  Fastest:       0.0006 secs
-  Average:       0.0057 secs
-  Requests/sec:  1752.0004
-
-Status code distribution:
-  [200]    20000 responses
+  Total:        1.8671 secs
+  Slowest:      0.0112 secs
+  Fastest:      0.0001 secs
+  Average:      0.0009 secs
+  Requests/sec: 10711.7919
 
 Response time histogram:
-  0.001 [1]     |
-  0.004 [308]   |∎
-  0.007 [18044] |∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
-  0.011 [1189]  |∎∎∎
-  0.014 [357]   |∎
-  0.017 [58]    |
-  0.021 [19]    |
-  0.024 [7]     |
-  0.028 [2]     |
-  0.031 [10]    |
-  0.034 [5]     |
+  0.000 [1]     |
+  0.001 [14044] |∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
+  0.002 [5030]  |∎∎∎∎∎∎∎∎∎∎∎∎∎∎
+  0.003 [709]   |∎∎
+  0.005 [139]   |
+  0.006 [36]    |
+  0.007 [19]    |
+  0.008 [8]     |
+  0.009 [7]     |
+  0.010 [3]     |
+  0.011 [4]     |
 
 Latency distribution:
-  10% in 0.0047 secs
-  25% in 0.0050 secs
-  50% in 0.0053 secs
-  75% in 0.0058 secs
-  90% in 0.0068 secs
-  95% in 0.0089 secs
-  99% in 0.0120 secs
+  10% in 0.0001 secs
+  25% in 0.0003 secs
+  50% in 0.0008 secs
+  75% in 0.0013 secs
+  90% in 0.0018 secs
+  95% in 0.0022 secs
+  99% in 0.0034 secs
+
+Details (average, fastest, slowest):
+  DNS+dialup: 0.0000 secs, 0.0000 secs, 0.0056 secs
+  DNS-lookup: 0.0000 secs, 0.0000 secs, 0.0020 secs
+  req write:  0.0000 secs, 0.0000 secs, 0.0042 secs
+  resp wait:  0.0009 secs, 0.0000 secs, 0.0098 secs
+  resp read:  0.0000 secs, 0.0000 secs, 0.0038 secs
+
+Status code distribution:
+  [200]	20000 responses
 ```
