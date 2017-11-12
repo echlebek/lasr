@@ -15,7 +15,7 @@ type ID interface {
 type Uint64ID uint64
 
 func (id Uint64ID) MarshalBinary() ([]byte, error) {
-	buf := bytes.NewBuffer(make([]byte, 8))
+	buf := bytes.NewBuffer(make([]byte, 0, 8))
 	err := binary.Write(buf, binary.BigEndian, id)
 	return buf.Bytes(), err
 }

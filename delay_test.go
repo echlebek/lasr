@@ -38,7 +38,9 @@ func TestWakeAtOnReloadWithDelayed_GH6(t *testing.T) {
 	q, cleanup := newQ(t)
 	defer cleanup()
 
-	_, err := q.Delay([]byte("foo"), time.Now().Add(time.Hour))
+	nextWake := time.Now().Add(time.Hour)
+
+	_, err := q.Delay([]byte("foo"), nextWake)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +55,9 @@ func TestWakeAtOnReloadWithDelayed_GH6(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(q.waker.wakes) == 0 {
-		t.Error("wakes not reapplied on init")
+	q.waker.Lock()
+	if got, want := q.waker.nextWake, nextWake; !got.Equal(want) {
+		t.Errorf("bad nextWake: got %v, want %v", got, want)
 	}
+	q.waker.Unlock()
 }
