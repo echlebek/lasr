@@ -44,6 +44,8 @@ func (h *timeHeap) PopTime() time.Time {
 	return heap.Pop(h).(time.Time)
 }
 
+// waker wakes up when told to, or in the future according to an ordered
+// list of times (stored by timeHeap).
 type waker struct {
 	C        chan struct{}
 	closed   chan struct{}

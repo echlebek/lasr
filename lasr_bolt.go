@@ -3,6 +3,7 @@ package lasr
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"sync"
@@ -135,6 +136,22 @@ func (q *Q) equilibrate() error {
 		root, err := tx.CreateBucketIfNotExists(q.name)
 		if err != nil {
 			return err
+		}
+		if len(q.keys.delayed) > 0 && !q.isClosed() {
+			// WakeAt for all delayed messages
+			delayed, err := q.bucket(tx, q.keys.delayed)
+			if err != nil {
+				return err
+			}
+			delayC := delayed.Cursor()
+			for k, _ := delayC.First(); k != nil; k, _ = delayC.Next() {
+				var id uint64
+				err := binary.Read(bytes.NewReader(k), binary.BigEndian, &id)
+				if err != nil {
+					return fmt.Errorf("error reading delayed key %v: %s", k, err)
+				}
+				q.waker.WakeAt(time.Unix(0, int64(id)))
+			}
 		}
 		// Delete the unacked bucket now that the unacked messages have been
 		// returned to the ready bucket.

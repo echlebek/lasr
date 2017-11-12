@@ -465,24 +465,6 @@ func TestNackConcurrent(t *testing.T) {
 	}
 }
 
-func benchSend(b *testing.B, msgSize int) {
-	q, cleanup := newQ(b)
-	defer cleanup()
-	msg := make([]byte, msgSize)
-	for i := 0; i < len(msg); i++ {
-		msg[i] = byte(i % 256)
-	}
-	b.ResetTimer()
-
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			if _, err := q.Send(msg); err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
-}
-
 func TestClose(t *testing.T) {
 	q, cleanup := newQ(t)
 	defer cleanup()
@@ -645,8 +627,50 @@ func TestNackDeletesMessage_GH5(t *testing.T) {
 	}
 }
 
+func TestWakeAtOnReloadWithDelayed_GH6(t *testing.T) {
+	q, cleanup := newQ(t)
+	defer cleanup()
+
+	_, err := q.Delay([]byte("foo"), time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = q.Delay([]byte("bar"), time.Now().Add(time.Hour*2))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	q, err = NewQ(q.db, "testing")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(q.waker.wakes) == 0 {
+		t.Error("wakes not reapplied on init")
+	}
+}
+
 func BenchmarkSend_64(b *testing.B) {
 	benchSend(b, 64)
+}
+
+func benchSend(b *testing.B, msgSize int) {
+	q, cleanup := newQ(b)
+	defer cleanup()
+	msg := make([]byte, msgSize)
+	for i := 0; i < len(msg); i++ {
+		msg[i] = byte(i % 256)
+	}
+	b.ResetTimer()
+
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			if _, err := q.Send(msg); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }
 
 func benchRoundtrip(b *testing.B, msgSize int) {
