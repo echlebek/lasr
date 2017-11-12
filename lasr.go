@@ -27,7 +27,7 @@ var (
 	MaxDelayTime = time.Unix(0, 1<<63-1)
 )
 
-// ID is used for bolt keys. Every message will be assigned an ID.
+// ID is used for uniquely identifying messages in a Q.
 type ID interface {
 	encoding.BinaryMarshaler
 }
