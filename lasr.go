@@ -1,8 +1,6 @@
 package lasr
 
 import (
-	"bytes"
-	"encoding/binary"
 	"fmt"
 	"sync"
 	"time"
@@ -136,9 +134,8 @@ func (q *Q) equilibrate() error {
 			}
 			delayC := delayed.Cursor()
 			for k, _ := delayC.First(); k != nil; k, _ = delayC.Next() {
-				var id uint64
-				err := binary.Read(bytes.NewReader(k), binary.BigEndian, &id)
-				if err != nil {
+				var id Uint64ID
+				if err := id.UnmarshalBinary(k); err != nil {
 					return fmt.Errorf("error reading delayed key %v: %s", k, err)
 				}
 				q.waker.WakeAt(time.Unix(0, int64(id)))

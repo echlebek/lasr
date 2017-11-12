@@ -20,6 +20,10 @@ func (id Uint64ID) MarshalBinary() ([]byte, error) {
 	return buf.Bytes(), err
 }
 
+func (id *Uint64ID) UnmarshalBinary(b []byte) error {
+	return binary.Read(bytes.NewReader(b), binary.BigEndian, id)
+}
+
 // Message is a messaged returned from Q on Receive.
 //
 // Message contains a Body and an ID. The ID will be equal to the ID that was
