@@ -1,3 +1,5 @@
+[![Build Status](https://api.travis-ci.org/echlebek/lasr.svg)](https://api.travis-ci.org/echlebek/lasr)
+
 # lasr
 A persistent message queue backed by BoltDB. This queue is useful when the producers and consumers can live in the same process.
 
