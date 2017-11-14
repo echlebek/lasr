@@ -191,8 +191,16 @@ func TestUnacked(t *testing.T) {
 	}
 }
 
-func BenchmarkSend_64(b *testing.B) {
-	benchSend(b, 64)
+func BenchmarkSend_4K(b *testing.B) {
+	benchSend(b, 4096)
+}
+
+func BenchmarkSend_1M(b *testing.B) {
+	benchSend(b, 1<<20)
+}
+
+func BenchmarkSend_16M(b *testing.B) {
+	benchSend(b, 1<<24)
 }
 
 func benchSend(b *testing.B, msgSize int) {
@@ -238,6 +246,14 @@ func benchRoundtrip(b *testing.B, msgSize int) {
 	})
 }
 
-func BenchmarkRoundtrip_64(b *testing.B) {
-	benchRoundtrip(b, 64)
+func BenchmarkRoundtrip_4K(b *testing.B) {
+	benchRoundtrip(b, 4096)
+}
+
+func BenchmarkRoundTrip_1M(b *testing.B) {
+	benchRoundtrip(b, 1<<20)
+}
+
+func BenchmarkRoundTrip_16M(b *testing.B) {
+	benchRoundtrip(b, 1<<24)
 }
