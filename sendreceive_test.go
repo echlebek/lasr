@@ -212,13 +212,11 @@ func benchSend(b *testing.B, msgSize int) {
 	}
 	b.ResetTimer()
 
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			if _, err := q.Send(msg); err != nil {
-				b.Fatal(err)
-			}
+	for i := 0; i < b.N; i++ {
+		if _, err := q.Send(msg); err != nil {
+			b.Fatal(err)
 		}
-	})
+	}
 }
 
 func benchRoundtrip(b *testing.B, msgSize int) {
@@ -230,20 +228,18 @@ func benchRoundtrip(b *testing.B, msgSize int) {
 	}
 	ctx := context.Background()
 	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			if _, err := q.Send(msg); err != nil {
-				b.Fatal(err)
-			}
-			msg, err := q.Receive(ctx)
-			if err != nil {
-				b.Fatal(err)
-			}
-			if err := msg.Ack(); err != nil {
-				b.Fatal(err)
-			}
+	for i := 0; i < b.N; i++ {
+		if _, err := q.Send(msg); err != nil {
+			b.Fatal(err)
 		}
-	})
+		msg, err := q.Receive(ctx)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := msg.Ack(); err != nil {
+			b.Fatal(err)
+		}
+	}
 }
 
 func BenchmarkRoundtrip_4K(b *testing.B) {
