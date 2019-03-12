@@ -129,6 +129,7 @@ func TestUnacked(t *testing.T) {
 	q.inFlight = sync.WaitGroup{}
 
 	// Make sure the unacked message is in the unacked queue
+	q.mu.RLock()
 	err = q.db.Update(func(tx *bolt.Tx) error {
 		bucket, err := q.bucket(tx, q.keys.unacked)
 		if err != nil {
@@ -144,6 +145,7 @@ func TestUnacked(t *testing.T) {
 		}
 		return nil
 	})
+	q.mu.RUnlock()
 	if err != nil {
 		t.Fatal(err)
 	}
