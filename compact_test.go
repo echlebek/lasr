@@ -35,4 +35,11 @@ func TestCompactDB(t *testing.T) {
 	if oldPages <= newPages {
 		t.Fatalf("expected fewer pages in new db (%d old, %d new)", oldPages, newPages)
 	}
+	for i := 0; i < 399; i++ {
+		if msg, err := q.Receive(context.Background()); err != nil {
+			t.Fatal(err)
+		} else if len(msg.Body) == 0 {
+			t.Fatal("message length zero")
+		}
+	}
 }
