@@ -14,6 +14,8 @@ func (q *Q) Wait(msg []byte, on ...ID) (ID, error) {
 		return q.Send(msg)
 	}
 	var id ID
+	q.mu.RLock()
+	defer q.mu.RUnlock()
 	return id, q.db.Update(func(tx *bolt.Tx) error {
 		var err error
 		id, err = q.nextSequence(tx)
