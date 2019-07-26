@@ -6,10 +6,10 @@ A persistent message queue backed by BoltDB. This queue is useful when the produ
 
 Project goals
 -------------
-  * Data integrity over performance.
-  * Simplicity over complexity.
-  * Ease of use.
-  * Minimal feature set.
+- Data integrity over performance.
+- Simplicity over complexity.
+- Ease of use.
+- Minimal feature set.
 
 Safety
 ------
