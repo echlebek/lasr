@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"flag"
 	"fmt"
 	"io"
@@ -12,11 +13,15 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/boltdb/bolt"
 	"github.com/echlebek/lasr"
+
+	_ "modernc.org/sqlite"
 )
 
-var port = flag.Int("port", 8080, "Port to listen on")
+var (
+	port = flag.Int("port", 8080, "Port to listen on")
+	path = flag.String("path", "", "path to lasr db")
+)
 
 type Q struct {
 	*lasr.Q
@@ -36,21 +41,21 @@ func (q Q) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 func main() {
 	flag.Parse()
-	td, err := ioutil.TempDir("", "")
-	if err != nil {
-		log.Fatal(err)
+	if *path == "" {
+		td, err := ioutil.TempDir("", "")
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer os.RemoveAll(td)
+		*path = filepath.Join(td, "lasr.db")
 	}
-	fp := filepath.Join(td, "lasr.db")
-	db, err := bolt.Open(fp, 0600, nil)
+	db, err := sql.Open("sqlite", *path)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer func() {
 		if err := db.Close(); err != nil {
 			log.Println(err)
-		}
-		if err := os.RemoveAll(td); err != nil {
-			log.Fatal(err)
 		}
 	}()
 	q, err := lasr.NewQ(db, "test")

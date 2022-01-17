@@ -1,15 +1,13 @@
 package lasr
 
 import (
-	"bytes"
 	"context"
 	"testing"
 	"time"
 )
 
 func TestWait(t *testing.T) {
-	q, cleanup := newQ(t)
-	defer cleanup()
+	q := newQ(t)
 	var ids []ID
 	msg := []byte("wayne brady")
 	for i := 0; i < 10; i++ {
@@ -34,6 +32,14 @@ func TestWait(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	row := q.db.QueryRow("SELECT count(*) FROM wait")
+	var count int
+	if err := row.Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Errorf("bad count: got %d, want 0", count)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	doneWaiting, err := q.Receive(ctx)
@@ -45,11 +51,7 @@ func TestWait(t *testing.T) {
 			t.Fatal(err)
 		}
 	}()
-	want, err := waiting.MarshalBinary()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := doneWaiting.ID; !bytes.Equal(got, want) {
+	if got, want := doneWaiting.ID, waiting; got != want {
 		t.Errorf("wanted ID %x last, but got %x", got, want)
 	}
 }

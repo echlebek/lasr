@@ -7,29 +7,6 @@ import (
 // Options can be passed to NewQ.
 type Option func(q *Q) error
 
-// WithSequencer will cause a Q to use a user-provided Sequencer.
-func WithSequencer(seq Sequencer) Option {
-	return func(q *Q) error {
-		if q.optsApplied {
-			return ErrOptionsApplied
-		}
-		q.seq = seq
-		return nil
-	}
-}
-
-// WithDeadLetters will cause nacked messages that are not retried to be added
-// to a dead letters queue.
-func WithDeadLetters() Option {
-	return func(q *Q) error {
-		if q.optsApplied {
-			return ErrOptionsApplied
-		}
-		q.keys.returned = []byte("deadletters")
-		return nil
-	}
-}
-
 // WithMessageBufferSize sets the message buffer size. By default, the message
 // buffer size is 0. Values less than 0 are not allowed.
 //
