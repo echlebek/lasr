@@ -4,13 +4,10 @@ import (
 	"context"
 	"sync"
 	"testing"
-
-	"github.com/boltdb/bolt"
 )
 
 func TestAckConcurrent(t *testing.T) {
-	q, cleanup := newQ(t, WithDeadLetters())
-	defer cleanup()
+	q := newQ(t)
 
 	msg := []byte("foo")
 	if _, err := q.Send(msg); err != nil {
@@ -58,8 +55,7 @@ func TestAckConcurrent(t *testing.T) {
 }
 
 func TestNackConcurrent(t *testing.T) {
-	q, cleanup := newQ(t, WithDeadLetters())
-	defer cleanup()
+	q := newQ(t)
 
 	msg := []byte("foo")
 	if _, err := q.Send(msg); err != nil {
@@ -107,8 +103,7 @@ func TestNackConcurrent(t *testing.T) {
 }
 
 func TestNackDeletesMessage_GH5(t *testing.T) {
-	q, cleanup := newQ(t)
-	defer cleanup()
+	q := newQ(t)
 
 	_, err := q.Send([]byte("foo"))
 	if err != nil {
@@ -124,19 +119,12 @@ func TestNackDeletesMessage_GH5(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = q.db.Update(func(tx *bolt.Tx) error {
-		bucket, err := q.bucket(tx, q.keys.unacked)
-		if err != nil {
-			return err
-		}
-		k, _ := bucket.Cursor().First()
-		if k != nil {
-			t.Error("message remains unacked")
-		}
-		return nil
-	})
-
-	if err != nil {
+	row := q.db.QueryRow("SELECT count(*) FROM queue WHERE id = ?;", msg.ID)
+	var count int
+	if err := row.Scan(&count); err != nil {
 		t.Fatal(err)
+	}
+	if count > 0 {
+		t.Fatalf("bad count: got %d, want 0", count)
 	}
 }

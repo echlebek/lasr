@@ -5,28 +5,31 @@ import (
 	"context"
 	"sync"
 	"testing"
-
-	"github.com/boltdb/bolt"
 )
 
 func TestSendReceive(t *testing.T) {
-	q, cleanup := newQ(t)
-	defer cleanup()
+	q := newQ(t)
 
 	msg := []byte("foobar")
 	id, err := q.Send(msg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	idb, err := id.MarshalBinary()
+	rows, err := q.db.Query("SELECT id FROM queue")
 	if err != nil {
 		t.Fatal(err)
+	}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
 	}
 	message, err := q.Receive(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(message.ID, idb) {
+	if message.ID != id {
 		t.Error("messages do not match")
 	}
 	if !bytes.Equal(message.Body, msg) {
@@ -38,8 +41,7 @@ func TestSendReceive(t *testing.T) {
 }
 
 func TestSendReceiveNackNoRetry(t *testing.T) {
-	q, cleanup := newQ(t)
-	defer cleanup()
+	q := newQ(t)
 
 	msg := []byte("foobar")
 	if _, err := q.Send(msg); err != nil {
@@ -58,15 +60,10 @@ func TestSendReceiveNackNoRetry(t *testing.T) {
 }
 
 func TestSendReceiveNackWithRetry(t *testing.T) {
-	q, cleanup := newQ(t)
-	defer cleanup()
+	q := newQ(t)
 
 	msg := []byte("foobar")
-	id, err := q.Send(msg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	idb, err := id.MarshalBinary()
+	_, err := q.Send(msg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,12 +74,10 @@ func TestSendReceiveNackWithRetry(t *testing.T) {
 	if err := message.Nack(true); err != nil {
 		t.Fatal(err)
 	}
+
 	message, err = q.Receive(context.Background())
 	if err != nil {
 		t.Fatal(err)
-	}
-	if !bytes.Equal(message.ID, idb) {
-		t.Errorf("bad id: %v", message.ID)
 	}
 	if !bytes.Equal(message.Body, msg) {
 		t.Errorf("bad body: %q", string(message.Body))
@@ -93,8 +88,7 @@ func TestSendReceiveNackWithRetry(t *testing.T) {
 }
 
 func TestReceiveContextCancelled(t *testing.T) {
-	q, cleanup := newQ(t)
-	defer cleanup()
+	q := newQ(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -108,15 +102,10 @@ func TestReceiveContextCancelled(t *testing.T) {
 }
 
 func TestUnacked(t *testing.T) {
-	q, cleanup := newQ(t)
-	defer cleanup()
+	q := newQ(t)
 
 	msg := []byte("foo")
 	id, err := q.Send(msg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	idb, err := id.MarshalBinary()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,25 +118,13 @@ func TestUnacked(t *testing.T) {
 	q.inFlight = sync.WaitGroup{}
 
 	// Make sure the unacked message is in the unacked queue
-	q.mu.RLock()
-	err = q.db.Update(func(tx *bolt.Tx) error {
-		bucket, err := q.bucket(tx, q.keys.unacked)
-		if err != nil {
-			return err
-		}
-		if bucket == nil {
-			t.Error("nil bucket")
-			return nil
-		}
-		stats := bucket.Stats()
-		if got, want := stats.KeyN, 1; got != want {
-			t.Errorf("got %d unacked messages, want %d", got, want)
-		}
-		return nil
-	})
-	q.mu.RUnlock()
-	if err != nil {
+	row := q.db.QueryRow("SELECT count(*) FROM queue WHERE queue.state = 1;")
+	var count int
+	if err := row.Scan(&count); err != nil {
 		t.Fatal(err)
+	}
+	if got, want := count, 1; got != want {
+		t.Errorf("bad count: got %d, want %d", got, want)
 	}
 
 	// Assume at this point the program crashed and we loaded the db again.
@@ -157,19 +134,8 @@ func TestUnacked(t *testing.T) {
 	}
 
 	// Make sure all the messages are moved out of the unacked bucket
-	err = q.db.Update(func(tx *bolt.Tx) error {
-		bucket, err := q.bucket(tx, q.keys.unacked)
-		if err != nil {
-			return err
-		}
-		k, _ := bucket.Cursor().First()
-		if k != nil {
-			t.Errorf("expected empty bucket, found key %x", k)
-		}
-		return nil
-	})
-
-	if err != nil {
+	row = q.db.QueryRow("SELECT count(id) FROM queue WHERE state = 1;")
+	if err := row.Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 
@@ -188,7 +154,7 @@ func TestUnacked(t *testing.T) {
 		t.Errorf("bad body: got %q, want %q", got, want)
 	}
 
-	if got, want := m.ID, idb; !bytes.Equal(got, want) {
+	if got, want := m.ID, id; got != want {
 		t.Errorf("bad id: got %v, want %v", got, want)
 	}
 }
@@ -206,8 +172,7 @@ func BenchmarkSend_16M(b *testing.B) {
 }
 
 func benchSend(b *testing.B, msgSize int) {
-	q, cleanup := newQ(b)
-	defer cleanup()
+	q := newQ(b)
 	msg := make([]byte, msgSize)
 	for i := 0; i < len(msg); i++ {
 		msg[i] = byte(i % 256)
@@ -222,8 +187,7 @@ func benchSend(b *testing.B, msgSize int) {
 }
 
 func benchRoundtrip(b *testing.B, msgSize int) {
-	q, cleanup := newQ(b)
-	defer cleanup()
+	q := newQ(b)
 	msg := make([]byte, msgSize)
 	for i := 0; i < len(msg); i++ {
 		msg[i] = byte(i % 256)

@@ -38,7 +38,7 @@ func (h *timeHeap) PushTime(t time.Time) {
 
 func (h *timeHeap) PopTime() time.Time {
 	if len(*h) == 0 {
-		never := time.Unix(0, 1<<63-1)
+		never := time.Unix(0, (1<<63)-1)
 		return never
 	}
 	return heap.Pop(h).(time.Time)
