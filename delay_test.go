@@ -7,16 +7,11 @@ import (
 )
 
 func TestDelayed(t *testing.T) {
-	q, cleanup := newQ(t)
-	defer cleanup()
-	delayUntil := time.Now().Add(time.Millisecond * 100)
-	id, err := q.Delay(nil, delayUntil)
+	q := newQ(t)
+	delayUntil := time.Now().Add(time.Second)
+	_, err := q.Delay([]byte("delayed"), delayUntil)
 	if err != nil {
 		t.Fatal(err)
-	}
-	tm := int64(id.(Uint64ID))
-	if tm, now := time.Unix(0, tm).Round(time.Hour), time.Now().Round(time.Hour); !tm.Equal(now) {
-		t.Errorf("bad id: %v", tm)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
@@ -29,14 +24,13 @@ func TestDelayed(t *testing.T) {
 			t.Fatal(err)
 		}
 	}()
-	if time.Now().UnixNano() < delayUntil.UnixNano() {
+	if time.Now().Unix() < delayUntil.Unix() {
 		t.Errorf("delayed message arrived too early")
 	}
 }
 
 func TestWakeAtOnReloadWithDelayed_GH6(t *testing.T) {
-	q, cleanup := newQ(t)
-	defer cleanup()
+	q := newQ(t)
 
 	nextWake := time.Now().Add(time.Hour)
 
@@ -56,7 +50,7 @@ func TestWakeAtOnReloadWithDelayed_GH6(t *testing.T) {
 	}
 
 	q.waker.Lock()
-	if got, want := q.waker.nextWake, nextWake; !got.Equal(want) {
+	if got, want := q.waker.nextWake.Unix(), nextWake.Unix(); got != want {
 		t.Errorf("bad nextWake: got %v, want %v", got, want)
 	}
 	q.waker.Unlock()

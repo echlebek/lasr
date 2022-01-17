@@ -1,7 +1,5 @@
 package lasr
 
-import "github.com/boltdb/bolt"
-
 // Wait causes a message to wait for other messages to Ack, before entering the
 // Ready state.
 //
@@ -9,55 +7,31 @@ import "github.com/boltdb/bolt"
 // will enter the Ready state.
 //
 // When there are no messages to wait on, Wait behaves the same as Send.
-func (q *Q) Wait(msg []byte, on ...ID) (ID, error) {
+func (q *Q) Wait(msg []byte, on ...ID) (id ID, err error) {
 	if len(on) < 1 {
 		return q.Send(msg)
 	}
-	var id ID
-	q.mu.RLock()
-	defer q.mu.RUnlock()
-	return id, q.db.Update(func(tx *bolt.Tx) error {
-		var err error
-		id, err = q.nextSequence(tx)
-		if err != nil {
-			return err
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	tx, terr := q.db.Begin()
+	if terr != nil {
+		return 0, terr
+	}
+	defer func() {
+		if err == nil {
+			err = tx.Commit()
+		} else {
+			_ = tx.Rollback()
 		}
-		idb, err := id.MarshalBinary()
-		if err != nil {
-			return err
+	}()
+	row := tx.QueryRow(sendSQL, q.name, msg)
+	if err := row.Scan(&id); err != nil {
+		return 0, err
+	}
+	for _, waitee := range on {
+		if _, err := tx.Exec(waitOnSQL, id, waitee); err != nil {
+			return 0, err
 		}
-		blockedOn, err := q.bucket(tx, q.keys.blockedOn)
-		if err != nil {
-			return err
-		}
-		blockedMsg, err := blockedOn.CreateBucketIfNotExists(idb)
-		if err != nil {
-			return err
-		}
-		blocking, err := q.bucket(tx, q.keys.blocking)
-		if err != nil {
-			return err
-		}
-		for _, id := range on {
-			idc, err := id.MarshalBinary()
-			if err != nil {
-				return err
-			}
-			if err := blockedMsg.Put(idc, nil); err != nil {
-				return err
-			}
-			blockerMsg, err := blocking.CreateBucketIfNotExists(idc)
-			if err != nil {
-				return err
-			}
-			if err := blockerMsg.Put(idb, nil); err != nil {
-				return err
-			}
-		}
-		waiting, err := q.bucket(tx, q.keys.waiting)
-		if err != nil {
-			return err
-		}
-		return waiting.Put(idb, msg)
-	})
+	}
+	return id, nil
 }

@@ -2,7 +2,7 @@
 [![GoDoc](https://img.shields.io/badge/godoc-reference-blue.svg?style=flat-square)](https://godoc.org/github.com/echlebek/lasr)
 
 # lasr
-A persistent message queue backed by BoltDB. This queue is useful when the producers and consumers can live in the same process.
+A persistent message queue backed by sqlite3. This queue is useful when the producers and consumers can live in the same process.
 
 Project goals
 -------------
