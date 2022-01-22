@@ -13,8 +13,7 @@ func (q *Q) Send(message []byte) (ID, error) {
 	var id ID
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	row := q.db.QueryRow(sendSQL, q.name, message)
-	if err := row.Scan(&id); err != nil {
+	if err := q.queries.send.QueryRow(q.name, message).Scan(&id); err != nil {
 		return id, err
 	}
 	q.waker.Wake()
@@ -43,7 +42,7 @@ START:
 	}
 	select {
 	case <-q.waker.C:
-		if err := q.processReceives(); err != nil {
+		if err := q.processReceives(ctx); err != nil {
 			return nil, err
 		}
 		goto START
@@ -54,11 +53,11 @@ START:
 	}
 }
 
-func (q *Q) processReceives() error {
+func (q *Q) processReceives(ctx context.Context) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	limit := q.messages.Cap() - q.messages.Len()
-	rows, err := q.db.Query(recvSQL, limit)
+	rows, err := q.queries.recv.QueryContext(ctx, limit)
 	if err != nil {
 		return err
 	}

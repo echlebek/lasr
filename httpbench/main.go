@@ -15,8 +15,16 @@ import (
 
 	"github.com/echlebek/lasr"
 
+	_ "net/http/pprof"
+
 	_ "modernc.org/sqlite"
 )
+
+func init() {
+	go func() {
+		log.Println(http.ListenAndServe("localhost:6060", nil))
+	}()
+}
 
 var (
 	port = flag.Int("port", 8080, "Port to listen on")
@@ -58,7 +66,7 @@ func main() {
 			log.Println(err)
 		}
 	}()
-	q, err := lasr.NewQ(db, "test")
+	q, err := lasr.NewQ(db, "test", lasr.WithMessageBufferSize(1000))
 	if err != nil {
 		log.Println(err)
 		return
